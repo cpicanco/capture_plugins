@@ -60,11 +60,11 @@ class Participant_Driven_Screen_Marker_Calibration(Calibration_Plugin):
         self.fixation_boost = sample_duration/2.
         self.lead_in = 25 #frames of marker shown before starting to sample
         self.lead_out = 5 #frames of markers shown after sampling is donw
-
+        self.monitor_idx = 0
 
         self.active_site = None
         self.sites = []
-        self.display_pos = None
+        self.display_pos = -1., -1.
         self.on_position = False
 
         self.markers = []
@@ -94,83 +94,66 @@ class Participant_Driven_Screen_Marker_Calibration(Calibration_Plugin):
         else:
             self.window_position_default = (0, 0)
 
-
-    def init_gui(self):
-        self.monitor_idx = 0
+    def init_ui(self):
+        super().init_ui()
+        self.menu.label = "Participant Driven Screen Marker Calibration"
         self.monitor_names = [glfwGetMonitorName(m) for m in glfwGetMonitors()]
-
         #primary_monitor = glfwGetPrimaryMonitor()
-        self.info = ui.Info_Text("Calibrate gaze parameters using a screen based animation.")
-        self.g_pool.calibration_menu.append(self.info)
 
-        self.menu = ui.Growing_Menu('Controls')
-        self.g_pool.calibration_menu.append(self.menu)
+        self.menu.append(ui.Info_Text("Calibrate gaze parameters pressing space key for each marker."))
+
         self.menu.append(ui.Selector('monitor_idx',self,selection = range(len(self.monitor_names)),labels=self.monitor_names,label='Monitor'))
         self.menu.append(ui.Switch('fullscreen',self,label='Use fullscreen'))
         self.menu.append(ui.Slider('marker_scale',self,step=0.1,min=0.5,max=2.0,label='Marker size'))
         self.menu.append(ui.Slider('sample_duration',self,step=1,min=10,max=100,label='Sample duration'))
 
-        self.button = ui.Thumb('active',self,label='C',setter=self.toggle,hotkey='c')
-        self.button.on_color[:] = (.3,.2,1.,.9)
-        self.g_pool.quickbar.insert(0,self.button)
-
-
-    def deinit_gui(self):
-        if self.menu:
-            self.g_pool.calibration_menu.remove(self.menu)
-            self.g_pool.calibration_menu.remove(self.info)
-            self.menu = None
-        if self.button:
-            self.g_pool.quickbar.remove(self.button)
-            self.button = None
-
-
     def start(self):
         if not self.g_pool.capture.online:
-            logger.error("Calibration required world capture video input.")
+            logger.error("{} requires world capture video input.".format(self.mode_pretty))
             return
-        audio.say("Starting Calibration")
-        logger.info("Starting Calibration")
+        super().start()
+        audio.say("Starting {}".format(self.mode_pretty))
+        logger.info("Starting {}".format(self.mode_pretty))
+
         if self.g_pool.detection_mapping_mode == '3d':
-            self.sites = [  (.5, .5),
-                            (0.,1.),(1.,1.),
-                            (1., 0.),(0.,0.)]
-
+            if self.mode == 'calibration':
+                self.sites = [(.5, .5), (0., 1.), (1., 1.), (1., 0.), (0., 0.)]
+            else:
+                self.sites = [(.25, .5), (.5, .25), (.75, .5), (.5, .75)]
         else:
-            self.sites = [  (.25, .5), (0,.5),
-                        (0.,1.),(.5,1.),(1.,1.),
-                        (1.,.5),
-                        (1., 0.),(.5, 0.),(0.,0.),
-                        (.75,.5)]
-
+            if self.mode == 'calibration':
+                self.sites = [(.25, .5), (0, .5), (0., 1.), (.5, 1.), (1., 1.),
+                              (1., .5), (1., 0.), (.5, 0.), (0., 0.), (.75, .5)]
+            else:
+                self.sites = [(.5, .5), (.25, .25), (.25, .75), (.75, .75), (.75, .25)]
 
         self.active_site = self.sites.pop(0)
         self.active = True
         self.ref_list = []
         self.pupil_list = []
         self.clicks_to_close = 5
-        self.open_window("Calibration")
+        self.open_window(self.mode_pretty)
 
     def open_window(self,title='new_window'):
         if not self._window:
             if self.fullscreen:
                 monitor = glfwGetMonitors()[self.monitor_idx]
-                width,height,redBits,blueBits,greenBits,refreshRate = glfwGetVideoMode(monitor)
+                width, height, redBits, blueBits, greenBits, refreshRate = glfwGetVideoMode(monitor)
             else:
                 monitor = None
                 width,height= 640,360
 
             self._window = glfwCreateWindow(width, height, title, monitor=monitor, share=glfwGetCurrentContext())
             if not self.fullscreen:
-                glfwSetWindowPos(self._window,self.window_position_default[0],self.window_position_default[1])
+                glfwSetWindowPos(self._window, self.window_position_default[0], self.window_position_default[1])
 
-            glfwSetInputMode(self._window,GLFW_CURSOR,GLFW_CURSOR_HIDDEN)
+            glfwSetInputMode(self._window, GLFW_CURSOR, GLFW_CURSOR_HIDDEN)
 
-            #Register callbacks
-            glfwSetFramebufferSizeCallback(self._window,on_resize)
-            glfwSetKeyCallback(self._window,self.on_key)
-            glfwSetMouseButtonCallback(self._window,self.on_button)
-            on_resize(self._window,*glfwGetFramebufferSize(self._window))
+            # Register callbacks
+            glfwSetFramebufferSizeCallback(self._window, on_resize)
+            glfwSetKeyCallback(self._window, self.on_window_key)
+            glfwSetMouseButtonCallback(self._window, self.on_window_mouse_button)
+            on_resize(self._window, *glfwGetFramebufferSize(self._window))
 
             # gl_state settings
             active_window = glfwGetCurrentContext()
@@ -181,7 +164,7 @@ class Participant_Driven_Screen_Marker_Calibration(Calibration_Plugin):
 
             glfwMakeContextCurrent(active_window)
 
-    def on_key(self,window, key, scancode, action, mods):
+    def on_window_key(self,window, key, scancode, action, mods):
         if action == GLFW_PRESS:
             if key == GLFW_KEY_ESCAPE:
                 self.clicks_to_close = 0
@@ -189,22 +172,25 @@ class Participant_Driven_Screen_Marker_Calibration(Calibration_Plugin):
             if key == GLFW_KEY_SPACE:
                 self.space_key_was_pressed = True
 
-    def on_button(self,window,button, action, mods):
+    def on_window_mouse_button(self,window,button, action, mods):
         if action ==GLFW_PRESS:
             self.clicks_to_close -=1
 
 
     def stop(self):
         # TODO: redundancy between all gaze mappers -> might be moved to parent class
-        audio.say("Stopping Calibration")
-        logger.info("Stopping Calibration")
-        self.smooth_pos = 0,0
+        audio.say("Stopping {}".format(self.mode_pretty))
+        logger.info("Stopping {}".format(self.mode_pretty))
+        self.smooth_pos = 0, 0
         self.counter = 0
         self.close_window()
         self.active = False
         self.button.status_text = ''
-        finish_calibration(self.g_pool,self.pupil_list,self.ref_list)
-
+        if self.mode == 'calibration':
+            finish_calibration(self.g_pool, self.pupil_list, self.ref_list)
+        elif self.mode == 'accuracy_test':
+            self.finish_accuracy_test(self.pupil_list, self.ref_list)
+        super().stop()
 
     def close_window(self):
         if self._window:
@@ -312,12 +298,12 @@ class Participant_Driven_Screen_Marker_Calibration(Calibration_Plugin):
         r = 110*self.marker_scale * hdpi_factor
         gl.glMatrixMode(gl.GL_PROJECTION)
         gl.glLoadIdentity()
-        p_window_size = glfwGetWindowSize(self._window)
-        gl.glOrtho(0,p_window_size[0],p_window_size[1],0 ,-1,1)
+        p_window_size = glfwGetFramebufferSize(self._window)
+        gl.glOrtho(0, p_window_size[0], p_window_size[1], 0, -1, 1)
         # Switch back to Model View Matrix
         gl.glMatrixMode(gl.GL_MODELVIEW)
         gl.glLoadIdentity()
-
+        
         def map_value(value,in_range=(0,1),out_range=(0,1)):
             ratio = (out_range[1]-out_range[0])/(in_range[1]-in_range[0])
             return (value-in_range[0])*ratio+out_range[0]

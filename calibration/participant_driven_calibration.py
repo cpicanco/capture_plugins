@@ -51,7 +51,13 @@ class Participant_Driven_Screen_Marker_Calibration(Calibration_Plugin):
     Points are collected after space key is pressed
 
     """
-    def __init__(self, g_pool,fullscreen=True,marker_scale=1.0,sample_duration=40):
+    def __init__(
+            self, g_pool,
+            fullscreen=True,
+            marker_scale=1.0,
+            sample_duration=40,
+            monitor_idx=0
+        ):
         super().__init__(g_pool)
         self.detected = False
         self.space_key_was_pressed = False
@@ -60,7 +66,7 @@ class Participant_Driven_Screen_Marker_Calibration(Calibration_Plugin):
         self.fixation_boost = sample_duration/2.
         self.lead_in = 25 #frames of marker shown before starting to sample
         self.lead_out = 5 #frames of markers shown after sampling is donw
-        self.monitor_idx = 0
+        self.monitor_idx = monitor_idx
 
         self.active_site = None
         self.sites = []
@@ -303,7 +309,7 @@ class Participant_Driven_Screen_Marker_Calibration(Calibration_Plugin):
         # Switch back to Model View Matrix
         gl.glMatrixMode(gl.GL_MODELVIEW)
         gl.glLoadIdentity()
-        
+
         def map_value(value,in_range=(0,1),out_range=(0,1)):
             ratio = (out_range[1]-out_range[0])/(in_range[1]-in_range[0])
             return (value-in_range[0])*ratio+out_range[0]
@@ -334,6 +340,7 @@ class Participant_Driven_Screen_Marker_Calibration(Calibration_Plugin):
         d = {}
         d['fullscreen'] = self.fullscreen
         d['marker_scale'] = self.marker_scale
+        d['monitor_idx'] = self.monitor_idx
         return d
 
     def cleanup(self):

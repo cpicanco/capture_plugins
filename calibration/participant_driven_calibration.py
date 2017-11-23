@@ -21,6 +21,7 @@ from glfw import *
 from circle_detector import find_concetric_circles
 from file_methods import load_object,save_object
 from platform import system
+from random import shuffle
 
 import audio
 
@@ -56,7 +57,7 @@ class Participant_Driven_Screen_Marker_Calibration(Calibration_Plugin):
             fullscreen=True,
             marker_scale=1.0,
             sample_duration=40,
-            monitor_idx=0
+            monitor_idx=1
         ):
         super().__init__(g_pool)
         self.detected = False
@@ -104,10 +105,7 @@ class Participant_Driven_Screen_Marker_Calibration(Calibration_Plugin):
         super().init_ui()
         self.menu.label = "Participant Driven Screen Marker Calibration"
         self.monitor_names = [glfwGetMonitorName(m) for m in glfwGetMonitors()]
-        #primary_monitor = glfwGetPrimaryMonitor()
-
         self.menu.append(ui.Info_Text("Calibrate gaze parameters pressing space key for each marker."))
-
         self.menu.append(ui.Selector('monitor_idx',self,selection = range(len(self.monitor_names)),labels=self.monitor_names,label='Monitor'))
         self.menu.append(ui.Switch('fullscreen',self,label='Use fullscreen'))
         self.menu.append(ui.Slider('marker_scale',self,step=0.1,min=0.5,max=2.0,label='Marker size'))
@@ -121,17 +119,15 @@ class Participant_Driven_Screen_Marker_Calibration(Calibration_Plugin):
         audio.say("Starting {}".format(self.mode_pretty))
         logger.info("Starting {}".format(self.mode_pretty))
 
-        if self.g_pool.detection_mapping_mode == '3d':
-            if self.mode == 'calibration':
-                self.sites = [(.5, .5), (0., 1.), (1., 1.), (1., 0.), (0., 0.)]
-            else:
-                self.sites = [(.25, .5), (.5, .25), (.75, .5), (.5, .75)]
+        if self.mode == 'calibration':
+            self.sites = [(.5,  .5), (.25, .5), (0, .5), (1., .5), (.75, .5),
+                          (.5, 1.), (.25, 1.), (0.,  1.),  (1., 1.), (.75, 1.),
+                          (.25, .0), (1.,  0.), (.5, 0.), (0., 0.),  (.75, .0)
+                          ]
+            shuffle(self.sites)
+
         else:
-            if self.mode == 'calibration':
-                self.sites = [(.25, .5), (0, .5), (0., 1.), (.5, 1.), (1., 1.),
-                              (1., .5), (1., 0.), (.5, 0.), (0., 0.), (.75, .5)]
-            else:
-                self.sites = [(.5, .5), (.25, .25), (.25, .75), (.75, .75), (.75, .25)]
+            self.sites = [(.5, .5), (.25, .25), (.25, .75), (.75, .75), (.75, .25)]
 
         self.active_site = self.sites.pop(0)
         self.active = True
@@ -181,7 +177,6 @@ class Participant_Driven_Screen_Marker_Calibration(Calibration_Plugin):
     def on_window_mouse_button(self,window,button, action, mods):
         if action ==GLFW_PRESS:
             self.clicks_to_close -=1
-
 
     def stop(self):
         # TODO: redundancy between all gaze mappers -> might be moved to parent class
@@ -267,6 +262,9 @@ class Participant_Driven_Screen_Marker_Calibration(Calibration_Plugin):
             self.on_position = on_position
             self.button.status_text = '{} / {}'.format(self.active_site, 9)
 
+        if self._window:
+            self.gl_display_in_window()
+
     def gl_display(self):
         """
         use gl calls to render
@@ -284,11 +282,6 @@ class Participant_Driven_Screen_Marker_Calibration(Calibration_Plugin):
                                     (int(e[1][0]/2),int(e[1][1]/2)),
                                     int(e[-1]),0,360,15)
                 draw_polyline(pts,1,RGBA(0.,1.,0.,1.))
-
-        else:
-            pass
-        if self._window:
-            self.gl_display_in_window()
 
     def gl_display_in_window(self):
         active_window = glfwGetCurrentContext()
@@ -340,10 +333,11 @@ class Participant_Driven_Screen_Marker_Calibration(Calibration_Plugin):
         d = {}
         d['fullscreen'] = self.fullscreen
         d['marker_scale'] = self.marker_scale
+        d['sample_duration'] = self.sample_duration
         d['monitor_idx'] = self.monitor_idx
         return d
 
-    def cleanup(self):
+    def deinit_ui(self):
         """gets called when the plugin get terminated.
            either voluntarily or forced.
         """
@@ -351,6 +345,6 @@ class Participant_Driven_Screen_Marker_Calibration(Calibration_Plugin):
             self.stop()
         if self._window:
             self.close_window()
-        self.deinit_gui()
+        super().deinit_ui()
 
 del Calibration_Plugin

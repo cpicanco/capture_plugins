@@ -18,15 +18,13 @@ from methods import normalize,denormalize
 from gl_utils import adjust_gl_view,clear_gl_screen,basic_gl_setup
 import OpenGL.GL as gl
 from glfw import *
-from circle_detector import find_concetric_circles
+from circle_detector import CircleTracker
 from file_methods import load_object,save_object
 from platform import system
 from random import shuffle
 
-import audio
-
 from pyglui import ui
-from pyglui.cygl.utils import draw_points, draw_points_norm, draw_polyline, draw_polyline_norm, RGBA,draw_concentric_circles
+from pyglui.cygl.utils import draw_points, draw_polyline, RGBA
 from pyglui.pyfontstash import fontstash
 from pyglui.ui import get_opensans_font_path
 from calibration_routines.calibration_plugin_base import Calibration_Plugin
@@ -73,17 +71,12 @@ class Participant_Driven_Screen_Marker_Calibration(Calibration_Plugin):
         self.sites = []
         self.display_pos = -1., -1.
         self.on_position = False
-
-        self.markers = []
         self.pos = None
-
         self.marker_scale = marker_scale
 
         self._window = None
-
         self.menu = None
         self.button = None
-
         self.fullscreen = fullscreen
         self.clicks_to_close = 5
 
@@ -100,6 +93,9 @@ class Participant_Driven_Screen_Marker_Calibration(Calibration_Plugin):
             self.window_position_default = (8, 31)
         else:
             self.window_position_default = (0, 0)
+        
+        self.circle_tracker = CircleTracker()
+        self.markers = []
 
     def init_ui(self):
         super().init_ui()
@@ -116,7 +112,6 @@ class Participant_Driven_Screen_Marker_Calibration(Calibration_Plugin):
             logger.error("{} requires world capture video input.".format(self.mode_pretty))
             return
         super().start()
-        audio.say("Starting {}".format(self.mode_pretty))
         logger.info("Starting {}".format(self.mode_pretty))
 
         if self.mode == 'calibration':
@@ -180,7 +175,6 @@ class Participant_Driven_Screen_Marker_Calibration(Calibration_Plugin):
 
     def stop(self):
         # TODO: redundancy between all gaze mappers -> might be moved to parent class
-        audio.say("Stopping {}".format(self.mode_pretty))
         logger.info("Stopping {}".format(self.mode_pretty))
         self.smooth_pos = 0, 0
         self.counter = 0
@@ -212,17 +206,22 @@ class Participant_Driven_Screen_Marker_Calibration(Calibration_Plugin):
                 self.stop()
                 return
 
-            # detect the marker
-            self.markers = find_concetric_circles(gray_img, min_ring_count=4)
-            
+            # Update the marker
+            self.markers = self.circle_tracker.update(gray_img)
+            # Screen marker takes only Ref marker
+            self.markers = [marker for marker in self.markers if marker['marker_type'] == 'Ref']
+
             if len(self.markers) > 0:
                 self.detected = True
-                marker_pos = self.markers[0][0][0]  # first marker, innermost ellipse,center
-                self.pos = normalize(marker_pos, (frame.width, frame.height), flip_y=True)
-
+                # Set the pos to be the center of the first detected marker
+                marker_pos = self.markers[0]['img_pos']
+                self.pos = self.markers[0]['norm_pos']
             else:
                 self.detected = False
                 self.pos = None  # indicate that no reference is detected
+
+            if len(self.markers) > 1:
+                logger.warning("{} markers detected. Please remove all the other markers".format(len(self.markers)))
 
             # only save a valid ref position if within sample window of calibraiton routine
             on_position = self.lead_in < self.screen_marker_state < (self.lead_in+self.sample_duration)
@@ -260,7 +259,7 @@ class Participant_Driven_Screen_Marker_Calibration(Calibration_Plugin):
             # use np.arrays for per element wise math
             self.display_pos = np.array(self.active_site)
             self.on_position = on_position
-            self.button.status_text = '{} / {}'.format(self.active_site, 9)
+            self.button.status_text = '{} / {}'.format(self.active_site, 15)
 
         if self._window:
             self.gl_display_in_window()
@@ -277,11 +276,13 @@ class Participant_Driven_Screen_Marker_Calibration(Calibration_Plugin):
         # debug mode within world will show green ellipses around detected ellipses
         if self.active and self.detected:
             for marker in self.markers:
-                e = marker[-1] #outermost ellipse
-                pts = cv2.ellipse2Poly( (int(e[0][0]),int(e[0][1])),
-                                    (int(e[1][0]/2),int(e[1][1]/2)),
-                                    int(e[-1]),0,360,15)
-                draw_polyline(pts,1,RGBA(0.,1.,0.,1.))
+                e = marker['ellipses'][-1] # outermost ellipse
+                pts = cv2.ellipse2Poly((int(e[0][0]), int(e[0][1])),
+                                       (int(e[1][0]/2), int(e[1][1]/2)),
+                                        int(e[-1]), 0, 360, 15)
+                draw_polyline(pts, 1, RGBA(0.,1.,0.,1.))
+                if len(self.markers) > 1:
+                   draw_polyline(pts, 1, RGBA(1., 0., 0., .5), line_type=gl.GL_POLYGON)
 
     def gl_display_in_window(self):
         active_window = glfwGetCurrentContext()
@@ -294,7 +295,7 @@ class Participant_Driven_Screen_Marker_Calibration(Calibration_Plugin):
         clear_gl_screen()
 
         hdpi_factor = glfwGetFramebufferSize(self._window)[0]/glfwGetWindowSize(self._window)[0]
-        r = 110*self.marker_scale * hdpi_factor
+        r = self.marker_scale * hdpi_factor
         gl.glMatrixMode(gl.GL_PROJECTION)
         gl.glLoadIdentity()
         p_window_size = glfwGetFramebufferSize(self._window)
@@ -307,24 +308,28 @@ class Participant_Driven_Screen_Marker_Calibration(Calibration_Plugin):
             ratio = (out_range[1]-out_range[0])/(in_range[1]-in_range[0])
             return (value-in_range[0])*ratio+out_range[0]
 
-        pad = .7*r
+        pad = 90 * r
         screen_pos = map_value(self.display_pos[0],out_range=(pad,p_window_size[0]-pad)),map_value(self.display_pos[1],out_range=(p_window_size[1]-pad,pad))
         alpha = interp_fn(self.screen_marker_state,0.,1.,float(self.sample_duration+self.lead_in+self.lead_out),float(self.lead_in),float(self.sample_duration+self.lead_in))
 
-        draw_concentric_circles(screen_pos,r,4,alpha)
-        #some feedback on the detection state
+        r2 = 2 * r
+        draw_points([screen_pos], size=60*r2, color=RGBA(0., 0., 0., alpha), sharpness=0.9)
+        draw_points([screen_pos], size=38*r2, color=RGBA(1., 1., 1., alpha), sharpness=0.8)
+        draw_points([screen_pos], size=19*r2, color=RGBA(0., 0., 0., alpha), sharpness=0.55)
 
+        # some feedback on the detection state and button pressing
         if self.detected and self.on_position and self.space_key_was_pressed:
-            draw_points([screen_pos],size=10*self.marker_scale,color=RGBA(.8,.8,0.,alpha),sharpness=0.5)
+            color = RGBA(.8,.8,0., alpha)
         else:
             if self.detected:
-                draw_points([screen_pos],size=10*self.marker_scale,color=RGBA(0.,.8,0.,alpha),sharpness=0.5)
+                color = RGBA(0.,.8,0., alpha)
             else:
-                draw_points([screen_pos],size=10*self.marker_scale,color=RGBA(.8,0.,0.,alpha),sharpness=0.5)
+                color = RGBA(.8,0.,0., alpha)
+        draw_points([screen_pos],size=3*r2,color=color,sharpness=0.5)
 
         if self.clicks_to_close <5:
             self.glfont.set_size(int(p_window_size[0]/30.))
-            self.glfont.draw_text(p_window_size[0]/2.,p_window_size[1]/4.,'Touch {} more times to cancel calibration.'.format(self.clicks_to_close))
+            self.glfont.draw_text(p_window_size[0]/2.,p_window_size[1]/4.,'Touch {} more times to cancel {}.'.format(self.clicks_to_close, self.mode_pretty))
 
         glfwSwapBuffers(self._window)
         glfwMakeContextCurrent(active_window)
